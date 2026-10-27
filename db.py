@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 db.py - Gerenciador do Banco de Dados Relacional Híbrido (PostgreSQL na Nuvem / SQLite Local)
 Oferece persistência estruturada permanente no Render (PostgreSQL, Supabase, Neon ou SQLite com WAL).
@@ -61,15 +61,19 @@ class UniversalCursor:
         return self._cur.rowcount
 
 class UniversalConnection:
-    def __init__(self, conn, is_postgres=False):
+    def __init__(self, conn, is_postgres=False, keep_open=False):
         self._conn = conn
         self.is_postgres = is_postgres
+        self.keep_open = keep_open
 
     def cursor(self):
         return UniversalCursor(self._conn.cursor(), self.is_postgres)
 
     def commit(self):
-        return self._conn.commit()
+        try:
+            return self._conn.commit()
+        except Exception:
+            pass
 
     def rollback(self):
         try:
@@ -78,10 +82,11 @@ class UniversalConnection:
             pass
 
     def close(self):
-        try:
-            return self._conn.close()
-        except Exception:
-            pass
+        if not self.keep_open:
+            try:
+                return self._conn.close()
+            except Exception:
+                pass
 
     def __enter__(self):
         return self
@@ -91,41 +96,57 @@ class UniversalConnection:
             self.rollback()
         else:
             self.commit()
-        self.close()
+        if not self.keep_open:
+            self.close()
+
+_shared_pg_conn = None
 
 def get_connection():
-    """Retorna uma conexão Universal pronta para PostgreSQL na nuvem ou SQLite local."""
-    global _last_pg_error_time, _current_engine
+    """Retorna uma conexÃ£o Universal pronta para PostgreSQL na nuvem ou SQLite local com pool de conexÃ£o."""
+    global _last_pg_error_time, _current_engine, _shared_pg_conn
     target_url = get_database_url()
     
-    # Tenta PostgreSQL se URL disponível e não houve erro recente (< 15 segundos)
+    # Tenta PostgreSQL com reuso de conexÃ£o persistente de alta performance
     if target_url and (time.time() - _last_pg_error_time > 15):
         try:
             import psycopg2
             import psycopg2.extras
             
-            # Se for conexão externa (ex: Supabase, Neon, Render external), exige sslmode='require' se não estiver definido
+            if _shared_pg_conn is not None:
+                try:
+                    if not _shared_pg_conn.closed:
+                        with _shared_pg_conn.cursor() as test_cur:
+                            test_cur.execute("SELECT 1;")
+                        _current_engine = "PostgreSQL"
+                        return UniversalConnection(_shared_pg_conn, is_postgres=True, keep_open=True)
+                except Exception:
+                    try:
+                        _shared_pg_conn.close()
+                    except Exception:
+                        pass
+                    _shared_pg_conn = None
+
             conn_args = {
                 "cursor_factory": psycopg2.extras.RealDictCursor,
                 "connect_timeout": 6
             }
             if "sslmode" not in target_url and ("localhost" not in target_url and "127.0.0.1" not in target_url):
-                # Para Render interno sem SSL, testa conexão direta
                 if "dpg-" in target_url and "." not in target_url.split("@")[-1].split("/")[0]:
                     pass
                 else:
                     conn_args["sslmode"] = "require"
 
-            conn = psycopg2.connect(target_url, **conn_args)
-            conn.autocommit = True
+            _shared_pg_conn = psycopg2.connect(target_url, **conn_args)
+            _shared_pg_conn.autocommit = True
             _current_engine = "PostgreSQL"
-            return UniversalConnection(conn, is_postgres=True)
+            return UniversalConnection(_shared_pg_conn, is_postgres=True, keep_open=True)
         except Exception as e:
             _last_pg_error_time = time.time()
             _current_engine = "SQLite"
-            print(f"[DB] Falha na conexão PostgreSQL ({e}). Usando SQLite local de alta resiliência.")
+            _shared_pg_conn = None
+            print(f"[DB] Falha na conexÃ£o PostgreSQL ({e}). Usando SQLite local.")
             
-    # Fallback seguro com SQLite WAL
+    # Fallback SQLite WAL
     _current_engine = "SQLite"
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30.0)
     conn.row_factory = sqlite3.Row
@@ -135,7 +156,7 @@ def get_connection():
         conn.execute("PRAGMA foreign_keys = ON;")
     except Exception:
         pass
-    return UniversalConnection(conn, is_postgres=False)
+    return UniversalConnection(conn, is_postgres=False, keep_open=False)
 
 def get_db_status():
     """Retorna o status atual do motor de banco de dados para a API e dashboard."""
@@ -164,7 +185,12 @@ def get_db_status():
         "message": "Conectado ao PostgreSQL Permanente na Nuvem" if active_engine == "PostgreSQL" else "Operando em SQLite local (atenção no Render: configure DATABASE_URL para persistência entre reinícios)"
     }
 
-def init_db():
+_db_initialized = False
+
+def init_db(force=False):
+    global _db_initialized
+    if _db_initialized and not force:
+        return
     """Cria a estrutura de tabelas e índices se ainda não existirem."""
     with get_connection() as conn:
         cursor = conn.cursor()
@@ -799,7 +825,7 @@ def get_pda_report_inicio():
         else:
             return get_default_pda_report_inicio()
 
-def save_pda_report_inicio(report_dict):
+def save_pda_report_inicio(report_dict):    invalidate_pda_cache()
     """Salva ou atualiza os dados do Report de Início da Operação no banco."""
     if not report_dict:
         report_dict = get_default_pda_report_inicio()
@@ -855,8 +881,20 @@ def save_pda_report_inicio(report_dict):
 
     return get_pda_report_inicio()
 
+_pda_cache_data = None
+_pda_cache_time = 0
+
+def invalidate_pda_cache():
+    global _pda_cache_data, _pda_cache_time
+    _pda_cache_data = None
+    _pda_cache_time = 0
+
 def get_pda_data():
     """Retorna todo o estado do Controle de PDAs persistido no banco de dados."""
+    global _pda_cache_data, _pda_cache_time
+    now = time.time()
+    if _pda_cache_data is not None and (now - _pda_cache_time < 3.0):
+        return _pda_cache_data
     init_db()
     with get_connection() as conn:
         cursor = conn.cursor()
@@ -964,7 +1002,7 @@ def get_pda_data():
             "report_inicio": report_inicio
         }
 
-def save_pda_data(payload):
+def save_pda_data(payload):    invalidate_pda_cache()
     """Salva estado completo ou sincronização no banco de dados garantindo que registros nunca sejam perdidos."""
     if not payload:
         return get_pda_data()
@@ -1044,7 +1082,7 @@ def save_pda_data(payload):
     _backup_pda_json(data)
     return data
 
-def save_pda_registro(reg_dict):
+def save_pda_registro(reg_dict):    invalidate_pda_cache()
     """Salva/atualiza uma retirada, recebimento ou devolução no banco e sincroniza a frota."""
     if not reg_dict:
         return None
@@ -1131,7 +1169,7 @@ def delete_pda_registro(reg_id):
     _backup_pda_json(data)
     return True
 
-def save_pda_frota_item(codigo, status="Disponível", obs="OK"):
+def save_pda_frota_item(codigo,    invalidate_pda_cache() status="Disponível", obs="OK"):
     """Cadastra ou altera o status de um PDA específico."""
     init_db()
     cod = normalize_pda_codigo(codigo)

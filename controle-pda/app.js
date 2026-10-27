@@ -12,32 +12,41 @@ const STORAGE_KEYS = {
 // Lista de candidatos de URL da API com detecção automática de IP e fallback inteligente
 function getApiCandidates() {
   const list = [];
+
+  if (typeof window !== 'undefined') {
+    const loc = window.location;
+    const proto = loc.protocol || '';
+
+    // SE O SISTEMA ESTIVER NA NUVEM / RENDER (HTTPS ou HTTP):
+    // A MESMA ORIGEM Ã‰ PRIORIDADE ABSOLUTA E AUTOMÃTICA!
+    if (proto === 'http:' || proto === 'https:') {
+      list.push(''); // Mesma origem no Render (ex: /api/pda/data)
+    }
+  }
+
   const custom = (localStorage.getItem('pda_custom_api_url') || '').trim();
-  if (custom) list.push(custom.replace(/\/+$/, ''));
+  if (custom) {
+    // Se estiver em HTTPS (Render), descarta IP local HTTP antigo para evitar erro de conexÃ£o
+    if (typeof window !== 'undefined' && window.location.protocol === 'https:' && custom.startsWith('http://') && !custom.includes('onrender.com')) {
+      // Ignora IP local
+    } else {
+      list.push(custom.replace(/\/+$/, ''));
+    }
+  }
 
   if (typeof window !== 'undefined') {
     const loc = window.location;
     const proto = loc.protocol || '';
     const host = loc.hostname || '';
 
-    // SE O SISTEMA ESTIVER ONLINE (Render, HTTPS ou HTTP em qualquer domínio/porta):
-    // O caminho relativo '' é a MESMA origem do servidor Flask/Render e DEVE SER SEMPRE A 1ª OPÇÃO!
-    if (proto === 'http:' || proto === 'https:') {
-      list.push(''); // Mesma origem no Render (ex: https://xxx.onrender.com/api/pda/data)
-    }
-
-    // Se estiver em ambiente local de desenvolvimento (ex: Live Server)
     if (host === 'localhost' || host === '127.0.0.1') {
       list.push('http://localhost:5000');
       list.push('http://127.0.0.1:5000');
     }
 
-    // Endereço de rede local (apenas se não estiver em HTTPS para evitar erro de Mixed Content)
-    if (proto !== 'https:') {
+    if (proto !== 'https:' && host !== 'localhost' && host !== '127.0.0.1') {
       list.push('http://192.168.0.150:5000');
-      if (host && host !== 'localhost' && host !== '127.0.0.1') {
-        list.push(`http://${host}:5000`);
-      }
+      list.push(`http://${host}:5000`);
     }
   }
   return Array.from(new Set(list));
@@ -154,7 +163,10 @@ class PDAControlApp {
     this.fetchFromDatabase();
 
     // Polling contínuo de alta frequência (a cada 1.2s) para sincronização em tempo real entre computadores e celulares
-    setInterval(() => this.fetchFromDatabase(true), 1200);
+    setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      this.fetchFromDatabase(true);
+    }, 6000);
 
     // Sincroniza imediatamente quando a aba ganha foco ou visibilidade
     document.addEventListener('visibilitychange', () => {
@@ -514,15 +526,22 @@ class PDAControlApp {
   }
 
   showServerConfigModal() {
-    const current = localStorage.getItem('pda_custom_api_url') || CURRENT_API_BASE || 'http://192.168.0.150:5000';
-    const newUrl = prompt(`Configuração do Servidor Central (DC Bauru):\n\nStatus: ${this.isOnline ? '🟢 ONLINE (Conectado)' : '🔴 OFFLINE (Sem Conexão)'}\nServidor Atual: ${current}\n\nSe você estiver no Tablet/Celular e o IP do computador mudou, digite o endereço do servidor abaixo (ex: http://192.168.0.150:5000):`, current);
-    if (newUrl !== null && newUrl.trim() !== '') {
+    const defaultHost = (typeof window !== 'undefined' && window.location.origin) ? window.location.origin : '';
+    const current = localStorage.getItem('pda_custom_api_url') || CURRENT_API_BASE || defaultHost;
+    const newUrl = prompt(ConfiguraÃ§Ã£o do Servidor Central (DC Bauru):\n\nStatus: ${this.isOnline ? 'ðŸŸ¢ ONLINE (Conectado)' : 'ðŸ”´ OFFLINE (Sem ConexÃ£o)'}\nServidor Atual: ${current || 'Nuvem Render'}\n\nPara a nuvem Render, mantenha o endereÃ§o padrÃ£o:, current || defaultHost);
+    if (newUrl !== null) {
       const cleanUrl = newUrl.trim().replace(/\/+$/, '');
-      localStorage.setItem('pda_custom_api_url', cleanUrl);
-      CURRENT_API_BASE = cleanUrl;
-      this.showToast(`Endereço do servidor definido como: ${cleanUrl}. Reconectando...`, 'info');
+      if (cleanUrl === '' || cleanUrl === defaultHost) {
+        localStorage.removeItem('pda_custom_api_url');
+        CURRENT_API_BASE = '';
+      } else {
+        localStorage.setItem('pda_custom_api_url', cleanUrl);
+        CURRENT_API_BASE = cleanUrl;
+      }
+      this.showToast(Servidor configurado. Reconectando..., 'info');
       this.fetchFromDatabase();
     }
+  }
   }
 
   async syncToDatabase(silent = false) {
