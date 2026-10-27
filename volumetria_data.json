@@ -1,0 +1,24 @@
+﻿{
+    "status_operacional_dist":  {
+
+                                },
+    "data_referencia":  "26/10/2026",
+    "records":  [
+
+                ],
+    "status_viagem_dist":  {
+
+                           },
+    "kpis":  {
+                 "total_no_piso":  10790,
+                 "viagens_finalizadas":  0,
+                 "total_viagens":  0,
+                 "previsto":  0,
+                 "eficiencia":  100,
+                 "bipados":  0,
+                 "diferenca":  0,
+                 "coletas":  10790
+             },
+    "coletas":  10790,
+    "updated_at":  "2026-10-26 23:51:51"
+}
