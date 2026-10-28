@@ -825,7 +825,8 @@ def get_pda_report_inicio():
         else:
             return get_default_pda_report_inicio()
 
-def save_pda_report_inicio(report_dict):    invalidate_pda_cache()
+def save_pda_report_inicio(report_dict):
+    invalidate_pda_cache()
     """Salva ou atualiza os dados do Report de Início da Operação no banco."""
     if not report_dict:
         report_dict = get_default_pda_report_inicio()
@@ -1002,7 +1003,8 @@ def get_pda_data():
             "report_inicio": report_inicio
         }
 
-def save_pda_data(payload):    invalidate_pda_cache()
+def save_pda_data(payload):
+    invalidate_pda_cache()
     """Salva estado completo ou sincronização no banco de dados garantindo que registros nunca sejam perdidos."""
     if not payload:
         return get_pda_data()
@@ -1082,7 +1084,8 @@ def save_pda_data(payload):    invalidate_pda_cache()
     _backup_pda_json(data)
     return data
 
-def save_pda_registro(reg_dict):    invalidate_pda_cache()
+def save_pda_registro(reg_dict):
+    invalidate_pda_cache()
     """Salva/atualiza uma retirada, recebimento ou devolução no banco e sincroniza a frota."""
     if not reg_dict:
         return None
@@ -1169,8 +1172,9 @@ def delete_pda_registro(reg_id):
     _backup_pda_json(data)
     return True
 
-def save_pda_frota_item(codigo,    invalidate_pda_cache() status="Disponível", obs="OK"):
+def save_pda_frota_item(codigo, status="Disponivel", obs="OK"):
     """Cadastra ou altera o status de um PDA específico."""
+    invalidate_pda_cache()
     init_db()
     cod = normalize_pda_codigo(codigo)
     st = normalize_pda_status(status)
