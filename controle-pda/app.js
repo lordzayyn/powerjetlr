@@ -463,7 +463,7 @@ class PDAControlApp {
       try {
         const url = `${base}${path}`;
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 3500);
+        const timeoutId = setTimeout(() => controller.abort(), 15000);
         const resp = await fetch(url, { ...options, signal: controller.signal });
         clearTimeout(timeoutId);
 
